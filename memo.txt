@@ -1,0 +1,77 @@
+動作しなかったので、動くようにする試み。
+
+$ docker compose exec server iris session iris -Uconduit
+CONDUIT>
+
+Set user = ##class(Conduit.Model.User).%New()
+Set body={ "email": "test2@mail.com",  "password": "test2",  "username": "test2"}
+zw user.%JSONImport(body)
+zw user.%Save()
+w ##class(Conduit.API.impl).outputObject("user", user, "User")
+
+  Set sc=object.%JSONExportToString(.output, .mapping) Throw:('sc) ##class(%Exce
+                                                                  ^
+ption.StatusException).ThrowIfInterrupt(sc)
+<THROW>outputObject+1^Conduit.API.impl.1 *%Exception.StatusException ERROR #9752: Invalid JWK: {"alg":"HS256","k":"3ROQaAW4mftKyRp8DNdxiahqzWQ1EzTsCGvaD5pYbRE="}
+
+    ClassMethod outputObject(kind As %String, object As %JSON.Adaptor, mapping As %String) As %String
+    {
+    $$$ThrowOnError(object.%JSONExportToString(.output, .mapping))
+    Quit "{ """ _ kind _ """: " _ output _ "}"
+    }
+
+d user.%JSONExport()
+{"createdAt":"2023-12-06T03:18:09.443Z","updatedAt":"2023-12-06T03:18:12.425Z","id":4,"username":"test2","email":"test2@mail.com","bio":null,"image":"https://static.productionready.io/images/smiley-cyrus.jpg","following":false
+CONDUIT>
+
+set mapping="User"
+set sc=user.%JSONExportToString(.output, .mapping)
+zw sc
+sc="0 "_$lb($lb(9752,"{""alg"":""HS256"",""k"":""3ROQaAW4mftKyRp8DNdxiahqzWQ1EzTsCGvaD5pYbRE=""}",,,,,,,,$lb("GetJWK+36^%Net.JSON.JWKS.1","CONDUIT",$lb("e^GetJWK+36^%Net.JSON.JWKS.1^1","e^ValidateHeaderParams+41^%Net.JSON.JOSE.1^1","e^SignCompact+3^%Net.JSON.JWS.1^1","e^Sign+27^%Net.JSON.JWS.1^1","e^Create+21^%Net.JSON.JWT.1^1","e^ObjectToJWT+70^%OAuth2.JWT.1^1","e^tokenGet+9^Conduit.Model.User.1^1","e^%JSONExportToStringInternal+83^Conduit.Model.User.1^1","e^%JSONExportToString+5^%JSON.Adaptor.1^1","e^^^0"))))/* ERROR #9752: Invalid JWK: {"alg":"HS256","k":"3ROQaAW4mftKyRp8DNdxiahqzWQ1EzTsCGvaD5pYbRE="} */
+
+zw output
+output="{""id"":4,""email"":""test2@mail.com"",""createdAt"":""2023-12-06T03:18:09.443Z"",""updatedAt"":""2023-12-06T03:18:12.425Z"",""username"":""test2"",""bio"":null,""image"":""https://static.productionready.io/images/smiley-cyrus.jpg"""
+
+    Class Conduit.Model.User Extends (%Persistent, Conduit.Model.Base) [ Owner = {_PUBLIC} ]
+    {
+    Method passwordSet(value As %String) As %Status
+    {
+    Set i%salt = $system.Encryption.GenCryptRand(8)
+    Set i%password = $System.Encryption.SHA1Hash(value _ i%salt)
+    Quit $$$OK
+    }
+
+CONDUIT>w user.token
+
+  Set sc=##class(%OAuth2.JWT).ObjectToJWT(.JOSE, obj, jwks, jwks, .JWT) Throw:('
+sc) ##class(%Exception.StatusException).ThrowIfInterrupt(sc)
+   ^
+<THROW>tokenGet+9^Conduit.Model.User.1 *%Exception.StatusException ERROR #9752: Invalid JWK: {"alg":"HS256","k":"yJ3lja+Hre6EZAd1ae2z0Wpd0RScaIlo1oeDY4rO3iY="}
+
+##class(%OAuth2.JWT).ObjectToJWT()が既にdeprecated    
+
+つまり、token参照時に、tokenGet()が動き、そこで##class(%OAuth2.JWT).ObjectToJWT()が起動する。=>Invalid JWK
+
+新しいAPIで置き換え。
+set sc = ##class(%Net.JSON.JWK).Create("RS256",,.priv,.pub)
+set sc = ##class(%Net.JSON.JWKS).PutJWK(priv, .privJWKS)
+set sc = ##class(%Net.JSON.JWKS).PutJWK(pub, .pubJWKS)
+set sc = ##class(%Net.JSON.JWK).JWKtoASN1(.pub, .pem)
+/// save pem to file - this is your public key
+set der = $system.Encryption.Base64Decode($piece(pem,"-----",3))
+set fingerprint = $System.Encryption.Base64Encode($System.Encryption.SHAHash(256,der))
+set account = "myAccount"
+set user = "sean"
+Set now = ##class(%Library.PosixTime).LogicalToUnixTime(##class(%Library.PosixTime).CurrentUTCTimeStamp())\1
+set claims = {"iss":(account_"."_user_"."_fingerprint),"sub":(account_"."_user),"iat":(now),"exp":(now+(3600))}
+
+set sc = ##class(%Net.JSON.JWT).Create({"alg":"RS256"},,claims,.privJWKS,,.jwt)
+
+==> 反映済み
+
+(Bearerではなく)Authorization: Token JWTという形式に関する是非あり
+
+https://qiita.com/uasi/items/cfb60588daa18c2ec6f5
+
+realworldのspecとしてそう決めている、ということらしい。
+https://github.com/gothinkster/realworld/blob/main/api/openapi.yml

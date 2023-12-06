@@ -6,15 +6,15 @@ services:
       - .env
     image: intersystemsdc/iris-community:latest
     ports:
-      - 52773
+      - 58773:52773
     user: "51773"
     volumes:
       - ./init.db:/docker-entrypoint-initdb.d/
       - ./:/home/irisowner/conduit
-      - ./db:/usr/irissys/mgr/CONDUIT
+      #- ./db:/usr/irissys/mgr/CONDUIT
   web:
     build:
       context: web
       dockerfile: Dockerfile-${web:-vue}
     ports:
-      - 80:80
+      - 8888:80

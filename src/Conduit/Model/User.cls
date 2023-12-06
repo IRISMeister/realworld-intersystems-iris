@@ -39,6 +39,12 @@ Method passwordSet(value As %String) As %Status
   Quit $$$OK
 }
 
+/// Debug目的で一時的に追加
+Method passwordGet() As %Status
+{
+  Return i%password
+}
+
 Property followed As list Of User(SQLPROJECTION = "table/column", SQLTABLENAME = "Followed", STORAGEDEFAULT = "array");
 
 Property following As %Boolean;
@@ -93,21 +99,21 @@ ClassMethod ValidateUser(email, password, Output user) As %Boolean
 
 ClassMethod ValidateToken(token, Output user) As %Boolean
 {
-  Set alg = "HS256"
-  Set JOSE("sigalg") = alg
-  Set jwks = ..GetJWK(alg)
-  $$$ThrowOnError(##class(%OAuth2.JWT).JWTToObject(token, jwks, jwks, .JOSE, .obj))
-  if '$IsObject(obj) {
-    Quit 0
-  }
+  ; JWTToObject()もdeprecated ##class(%Net.JSON.JWT).Validate()使えとのこと。
+  ; https://docs.intersystems.com/irisforhealthlatest/csp/documatic/%25CSP.Documatic.cls?LIBRARY=%25SYS&CLASSNAME=%25Net.JSON.JWT#Validate
+  Set alg = "RS256"
+  Set tSC = ##class(Conduit.Model.User).GetKeys(alg,.priv,.pub)
+  set sc = ##class(%Net.JSON.JWKS).PutJWK(pub, .pubJWKS)
+  s sigJWKS=pubJWKS
+  Set tSC=##class(%Net.JSON.JWT).Validate(token,sigJWKS,,1,.claims,.operations)
 
-  Set exp = obj.exp
+  Set exp = claims.exp
   Set now = ##class(%OAuth2.Utils).TimeInSeconds($ztimestamp)
   if (exp<now) {
     Quit 0
   }
 
-  Set user = ##class(Conduit.Model.User).%OpenId(obj.id,, .tSC)
+  Set user = ##class(Conduit.Model.User).usernameOpen(claims.sub,, .tSC)
   Quit:$$$ISERR(tSC) 0
 
   Quit 1
@@ -117,15 +123,20 @@ Property token As %String(%JSONINCLUDE = "OUTPUTONLY", MAXLEN = 1000) [ Calculat
 
 Method tokenGet() As %String
 {
-  Set obj = {
-    "id": (..%Id()),
-    "username": (..username),
-    "exp": (##class(%OAuth2.Utils).TimeInSeconds($ztimestamp, ..#TOKENEXPIREDIN))
-  }
-  Set alg = "HS256"
-  Set JOSE("sigalg") = alg
-  Set jwks = ..GetJWK(alg)
-  $$$ThrowOnError(##class(%OAuth2.JWT).ObjectToJWT(.JOSE, obj, jwks, jwks, .JWT))
+  // RS256に変更
+  Set alg="RS256"
+  Set priv="",pub=""
+  Set tSC = ..GetKeys(alg,.priv,.pub)
+  set sc = ##class(%Net.JSON.JWKS).PutJWK(priv, .privJWKS)
+  set sc = ##class(%Net.JSON.JWKS).PutJWK(pub, .pubJWKS)
+  set sc = ##class(%Net.JSON.JWK).JWKtoASN1(.pub, .pem)
+  set der = $system.Encryption.Base64Decode($piece(pem,"-----",3))
+  set fingerprint = $System.Encryption.Base64Encode($System.Encryption.SHAHash(256,der))
+  set user = ..username
+  Set now = ##class(%Library.PosixTime).LogicalToUnixTime(##class(%Library.PosixTime).CurrentUTCTimeStamp())\1
+  set claims = {"iss":(user_"."_fingerprint),"sub":(user),"iat":(now),"exp":(now+(3600))}
+
+  $$$ThrowOnError(##class(%Net.JSON.JWT).Create({"alg":(alg)},,claims,.privJWKS,,.JWT))
 
   Quit JWT
 }
@@ -137,26 +148,21 @@ Method %OnBeforeSave(insert As %Boolean) As %Status
 	Quit $$$OK
 }
 
-ClassMethod JWTSecret() As %String
+ClassMethod GetKeys(alg, priv, pub) As %String
 {
-  If $Data(^JWTSecret, secret) {
-    Quit secret
+  If $Data(^JWTSecret("priv"), priv) {
+    Set priv={}.%FromJSON(priv)
+    If $Data(^JWTSecret("pub"), pub) {
+      Set pub={}.%FromJSON(pub)
+      Return $$$OK
+    }  
+  } 
+  Else { 
+    set sc = ##class(%Net.JSON.JWK).Create(alg,,.priv,.pub)
+    Set ^JWTSecret("priv")=priv.%ToJSON()
+    Set ^JWTSecret("pub")=pub.%ToJSON()
   }
-
-  #; No secret, yet, then generate new one
-
-  Set secret = $system.Encryption.GenCryptRand(32)
-  Set secret = $System.Encryption.Base64Encode(secret)
-
-  Set ^JWTSecret = secret
-  Quit secret
-}
-
-ClassMethod GetJWK(alg) As %String
-{
-  Set secret = ..JWTSecret()
-  Set jwks = { "keys": [{ "alg": (alg), "k": (secret) }] }
-  Quit jwks.%ToJSON()
+  Return $$$OK
 }
 
 XData Update [ XMLNamespace = "http://www.intersystems.com/jsonmapping" ]
