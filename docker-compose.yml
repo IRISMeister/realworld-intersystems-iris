@@ -16,5 +16,6 @@ services:
     build:
       context: web
       dockerfile: Dockerfile-${web:-vue}
+    image: realworld-intersystems-iris-web-${web:-vue}
     ports:
       - 8888:80

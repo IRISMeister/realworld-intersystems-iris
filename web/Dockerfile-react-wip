@@ -1,0 +1,18 @@
+FROM node:20
+
+WORKDIR /opt/
+
+# React frontend
+RUN git clone https://github.com/angelguzmaning/ts-redux-react-realworld-example-app.git && \
+    cd ts-redux-react-realworld-example-app && \
+    sed -i 's|https://api.realworld.io/api|/api|' src/config/settings.ts && \
+    export NODE_OPTIONS=--openssl-legacy-provider && \
+    npm install && \
+    npm run build
+
+# Simple webserver with configured proxy
+FROM caddy
+
+COPY --from=0 /opt/ts-redux-react-realworld-example-app/build /usr/share/caddy
+
+COPY ./Caddyfile /etc/caddy/Caddyfile
